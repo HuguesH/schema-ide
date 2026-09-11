@@ -1,0 +1,24 @@
+{
+  "name": "schema-ide",
+  "version": "1.0.0",
+  "description": "Schema IDE",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc && vite build",
+    "start": "vite preview",
+    "dev": "vite"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.1",
+    "typescript": "^5.3.3",
+    "vite": "^8.3.0"
+  },
+  "dependencies": {
+    "@sakirtemel/plantuml.js": "^1.0.1"
+  }
+}
