@@ -7,18 +7,23 @@
   "scripts": {
     "build": "tsc && vite build",
     "start": "vite preview",
-    "dev": "vite"
+    "dev": "vite",
+    "test:e2e": "playwright test"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
     "@types/node": "^20.11.0",
+    "@playwright/test": "^1.63.0",
     "tsx": "^4.7.1",
     "typescript": "^5.3.3",
     "vite": "^8.3.0"
   },
   "dependencies": {
-    "@sakirtemel/plantuml.js": "^1.0.1"
+    "@sakirtemel/plantuml.js": "^1.0.1",
+    "@types/pako": "^3.0.0",
+    "pako": "^3.0.2",
+    "plantuml-encoder": "^1.4.0"
   }
 }

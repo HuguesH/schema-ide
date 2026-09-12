@@ -60,3 +60,4 @@ Les composants particulièrement pertinents sont :
 2. Reproduire les interactions essentielles de l’éditeur officiel.
 3. Améliorer la compatibilité des formats et des fonctions d’export.
 4. Affiner l’interface et les comportements pour se rapprocher de `editor.plantuml.com`.
+5. ne developpe pas en responsive pour des resolutions mobiles, l'editeur est fait pour une résolution 16/9 sur un écran d'ordinateur
