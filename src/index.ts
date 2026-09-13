@@ -1,5 +1,8 @@
-import "./styles.css";
+import * as monaco from "monaco-editor";
+import "../node_modules/monaco-editor/min/vs/editor/editor.main.css";
 import { decode as decodePlantUml, encode as encodePlantUml } from "plantuml-encoder";
+import "./styles.css";
+import { registerSchemaLanguages, type SourceLanguage } from "./monaco-languages.js";
 
 type PlantUmlRuntime = {
   initialize(path: string): Promise<void>;
@@ -17,9 +20,20 @@ type RuntimeWindow = Window & {
   cheerpjInit?: (options: { preloadResources: string[] }) => Promise<void>;
 };
 
+type SchemaDocument = {
+  id: string;
+  name: string;
+  encoded: string;
+  hash: string;
+  modifiedAt: string;
+  renderedAt?: string;
+  language: SourceLanguage;
+};
+
 const runtimeWindow = window as RuntimeWindow;
 const storageKey = "schema-ide-documents";
 const currentSchemaKey = "schema-ide-current";
+const svgCacheKey = "schema-ide-svg-cache";
 const defaultSource = `@startuml
 title PlantUML Studio Base ####
 actor User
@@ -30,23 +44,14 @@ database LocalStorage
 User -> Editor ++: Write a diagram
 Editor -> LocalStorage++ : Save source
 return : listSchema
-Editor -> plantUML++ : reder diagram
+Editor -> plantUML++ : render diagram
 return : Rendered diagram
 return : affiche schéma
 
 @enduml`;
 
-type SchemaDocument = {
-  id: string;
-  name: string;
-  encoded: string;
-  savedAt: string;
-};
-
 const app = document.querySelector<HTMLDivElement>("#app");
-if (!app) {
-  throw new Error("Application root not found");
-}
+if (!app) throw new Error("Application root not found");
 
 app.innerHTML = `
   <div class="app-shell">
@@ -72,46 +77,49 @@ app.innerHTML = `
             </div>
             <div class="sidebar-actions">
               <button class="add-schema-button" id="add-schema-button" title="Nouveau schéma" aria-label="Nouveau schéma">+</button>
+              <button class="clear-cache-button" id="clear-cache-button" title="Supprimer le cache SVG de la session" aria-label="Supprimer le cache SVG de la session">⌫</button>
               <button class="collapse-workspace-button" id="collapse-workspace-button" title="Réduire Workspace" aria-label="Réduire Workspace">‹</button>
             </div>
           </div>
           <div class="schema-list" id="schema-list"></div>
         </aside>
         <section class="panel editor-panel">
-        <div class="panel-header">
-          <div>
-            <span class="eyebrow">Source</span>
-            <h1>Diagram editor</h1>
+          <div class="panel-header">
+            <div>
+              <span class="eyebrow">Source</span>
+              <h1>Diagram editor</h1>
+            </div>
+            <div class="panel-actions">
+              <select class="language-select" id="source-language" aria-label="Langage source">
+                <option value="plantuml">PlantUML</option>
+                <option value="structurizr">Structurizr DSL</option>
+              </select>
+              <button class="text-button" id="reset-button">Reset</button>
+              <button class="text-button" id="copy-button">Copy</button>
+              <label class="text-button file-button">
+                Import
+                <input id="file-input" type="file" accept=".puml,.plantuml,.dsl,.txt" />
+              </label>
+              <button class="primary-button" id="export-button">Export SVG</button>
+            </div>
           </div>
-          <div class="panel-actions">
-            <button class="text-button" id="reset-button">Reset</button>
-            <button class="text-button" id="copy-button">Copy</button>
-            <label class="text-button file-button">
-              Import
-              <input id="file-input" type="file" accept=".puml,.plantuml,.txt" />
-            </label>
-            <button class="primary-button" id="export-button">Export SVG</button>
+          <div class="url-bar">
+            <span class="url-method">LOCAL</span>
+            <input id="source-url" type="text" readonly aria-label="Adresse du diagramme" />
+            <button id="url-copy-button" title="Copier le lien" aria-label="Copier le lien">⧉</button>
+            <button id="url-open-button" title="Ouvrir dans une nouvelle fenêtre" aria-label="Ouvrir dans une nouvelle fenêtre">↗</button>
           </div>
-        </div>
-        <div class="url-bar">
-          <span class="url-method">LOCAL</span>
-          <input id="source-url" type="text" readonly aria-label="Adresse du diagramme" />
-          <button id="url-copy-button" title="Copier le lien" aria-label="Copier le lien">⧉</button>
-          <button id="url-open-button" title="Ouvrir dans une nouvelle fenêtre" aria-label="Ouvrir dans une nouvelle fenêtre">↗</button>
-        </div>
-        <div class="editor-wrap">
-          <div class="line-numbers" id="line-numbers" aria-hidden="true"></div>
-          <pre class="code-highlight" id="code-highlight" aria-hidden="true"></pre>
-          <textarea id="source-editor" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="Source PlantUML"></textarea>
-          <div class="editor-menu">
-            <button id="editor-copy-button" title="Copier le code" aria-label="Copier le code">⧉</button>
-            <button id="render-button" title="Rendre le diagramme (Ctrl+Entrée)" aria-label="Rendre le diagramme">▶</button>
+          <div class="editor-wrap">
+            <div id="source-editor" aria-label="Source PlantUML"></div>
+            <div class="editor-menu">
+              <button id="editor-copy-button" title="Copier le code" aria-label="Copier le code">⧉</button>
+              <button id="render-button" title="Rendre le diagramme (Ctrl+Entrée)" aria-label="Rendre le diagramme">▶</button>
+            </div>
           </div>
-        </div>
-        <div class="editor-footer">
-          <span id="source-stats">0 lignes · 0 caractères</span>
-          <span><kbd>Ctrl</kbd><span class="key-plus">+</span><kbd>Enter</kbd> pour rendre</span>
-        </div>
+          <div class="editor-footer">
+            <span id="source-stats">0 lignes · 0 caractères</span>
+            <span><kbd>Ctrl</kbd><span class="key-plus">+</span><kbd>Enter</kbd> pour rendre</span>
+          </div>
         </section>
       </div>
 
@@ -152,33 +160,70 @@ app.innerHTML = `
   </div>
 `;
 
-const editor = document.querySelector<HTMLTextAreaElement>("#source-editor")!;
-const lineNumbers = document.querySelector<HTMLDivElement>("#line-numbers")!;
-const codeHighlight = document.querySelector<HTMLPreElement>("#code-highlight")!;
-const image = document.querySelector<HTMLImageElement>("#diagram-image")!;
-const emptyPreview = document.querySelector<HTMLDivElement>("#empty-preview")!;
-const loadingOverlay = document.querySelector<HTMLDivElement>("#loading-overlay")!;
-const renderStatus = document.querySelector<HTMLSpanElement>("#render-status")!;
-const runtimeStatus = document.querySelector<HTMLSpanElement>("#runtime-status")!;
-const sourceUrl = document.querySelector<HTMLInputElement>("#source-url")!;
-const sourceStats = document.querySelector<HTMLSpanElement>("#source-stats")!;
-const zoomValue = document.querySelector<HTMLSpanElement>("#zoom-value")!;
-const schemaList = document.querySelector<HTMLDivElement>("#schema-list")!;
+const query = <T extends Element>(selector: string): T => {
+  const element = document.querySelector<T>(selector);
+  if (!element) throw new Error(`Missing element: ${selector}`);
+  return element;
+};
+
+const editorHost = query<HTMLDivElement>("#source-editor");
+const image = query<HTMLImageElement>("#diagram-image");
+const emptyPreview = query<HTMLDivElement>("#empty-preview");
+const loadingOverlay = query<HTMLDivElement>("#loading-overlay");
+const renderStatus = query<HTMLSpanElement>("#render-status");
+const runtimeStatus = query<HTMLSpanElement>("#runtime-status");
+const sourceUrl = query<HTMLInputElement>("#source-url");
+const sourceStats = query<HTMLSpanElement>("#source-stats");
+const zoomValue = query<HTMLSpanElement>("#zoom-value");
+const schemaList = query<HTMLDivElement>("#schema-list");
+const languageSelect = query<HTMLSelectElement>("#source-language");
+
+globalThis.MonacoEnvironment = {
+  getWorker: () => new Worker(new URL("./monaco-editor.worker.ts", import.meta.url), { type: "module" }),
+};
+registerSchemaLanguages();
+
+const monacoEditor = monaco.editor.create(editorHost, {
+  automaticLayout: true,
+  minimap: { enabled: false },
+  fontSize: 12,
+  lineHeight: 20,
+  padding: { top: 15, bottom: 15 },
+  scrollBeyondLastLine: false,
+  tabSize: 2,
+  wordWrap: "off",
+  theme: "vs-dark",
+  ariaLabel: "Source PlantUML",
+});
 
 let runtime: PlantUmlRuntime | undefined;
 let currentImageUrl: string | undefined;
 let zoom = 1;
 let renderTimer: number | undefined;
+let renderSequence = 0;
 let schemas: SchemaDocument[] = [];
 let currentSchemaId = "";
+let svgCache: Record<string, string> = {};
 
-function createSchema(name = "Schéma sans titre", source = defaultSource): SchemaDocument {
+function createSchema(name = "Schéma sans titre", source = defaultSource, language: SourceLanguage = "plantuml"): SchemaDocument {
+  const encoded = encodePlantUml(source);
   return {
     id: crypto.randomUUID(),
     name,
-    encoded: encodePlantUml(source),
-    savedAt: new Date().toISOString(),
+    encoded,
+    hash: hashEncodedSource(encoded),
+    modifiedAt: new Date().toISOString(),
+    language,
   };
+}
+
+function hashEncodedSource(encoded: string): string {
+  let hash = 14695981039346656037n;
+  for (let index = 0; index < encoded.length; index += 1) {
+    hash ^= BigInt(encoded.charCodeAt(index));
+    hash = BigInt.asUintN(64, hash * 1099511628211n);
+  }
+  return hash.toString(16).padStart(16, "0");
 }
 
 function getSchemaSource(schema: SchemaDocument): string {
@@ -190,21 +235,66 @@ function getSchemaName(source: string): string {
   return title || "Schéma sans titre";
 }
 
-function buildShareUrl(source: string): string {
-  return `${window.location.origin}${window.location.pathname}#${encodePlantUml(source)}`;
+function loadSvgCache(): void {
+  try {
+    const storedCache = JSON.parse(sessionStorage.getItem(svgCacheKey) ?? "{}") as unknown;
+    if (typeof storedCache !== "object" || storedCache === null || Array.isArray(storedCache)) {
+      svgCache = {};
+      return;
+    }
+    svgCache = Object.entries(storedCache).reduce<Record<string, string>>((cache, [hash, svg]) => {
+      if (typeof svg === "string") cache[hash] = svg;
+      return cache;
+    }, {});
+  } catch {
+    svgCache = {};
+  }
+}
+
+function persistSvgCache(): void {
+  sessionStorage.setItem(svgCacheKey, JSON.stringify(svgCache));
+}
+
+function getCachedSvg(hash: string): string | undefined {
+  return svgCache[hash];
+}
+
+function cacheSvg(hash: string, svg: string): void {
+  svgCache[hash] = svg;
+  persistSvgCache();
+}
+
+function removeCachedSvg(hash: string): void {
+  if (!(hash in svgCache)) return;
+  delete svgCache[hash];
+  persistSvgCache();
+}
+
+function clearSvgCache(): void {
+  svgCache = {};
+  sessionStorage.removeItem(svgCacheKey);
+}
+
+function buildShareUrl(hash: string): string {
+  return `${window.location.origin}${window.location.pathname}#${hash}`;
 }
 
 function loadSchemaFromUrl(): SchemaDocument | undefined {
-  const encoded = window.location.hash.slice(1);
-  if (!encoded) return undefined;
+  const token = window.location.hash.slice(1);
+  if (!token) return undefined;
+  const existingSchema = schemas.find((schema) => schema.hash === token || schema.id === token);
+  if (existingSchema) return existingSchema;
   try {
-    const source = decodePlantUml(encoded);
+    const source = decodePlantUml(token);
     if (!source.includes("@start")) return undefined;
+    const encoded = token;
     return {
       id: crypto.randomUUID(),
       name: getSchemaName(source),
       encoded,
-      savedAt: new Date().toISOString(),
+      hash: hashEncodedSource(encoded),
+      modifiedAt: new Date().toISOString(),
+      language: "plantuml",
     };
   } catch {
     return undefined;
@@ -217,21 +307,36 @@ function loadSchemas(): void {
     schemas = Array.isArray(storedSchemas)
       ? storedSchemas.flatMap((schema): SchemaDocument[] => {
         if (typeof schema !== "object" || schema === null) return [];
-        const candidate = schema as Partial<SchemaDocument> & { source?: unknown };
-        if (
-          typeof candidate.id !== "string"
-          || typeof candidate.name !== "string"
-          || typeof candidate.savedAt !== "string"
-        ) return [];
+        const candidate = schema as Partial<SchemaDocument> & { source?: unknown; savedAt?: unknown };
+        if (typeof candidate.id !== "string" || typeof candidate.name !== "string") return [];
+        const language: SourceLanguage = candidate.language === "structurizr" ? "structurizr" : "plantuml";
+        const modifiedAt = typeof candidate.modifiedAt === "string"
+          ? candidate.modifiedAt
+          : typeof candidate.savedAt === "string"
+            ? candidate.savedAt
+            : new Date().toISOString();
+        const renderedAt = typeof candidate.renderedAt === "string" ? candidate.renderedAt : undefined;
         if (typeof candidate.encoded === "string") {
-          return [{ id: candidate.id, name: candidate.name, encoded: candidate.encoded, savedAt: candidate.savedAt }];
+          return [{
+            id: candidate.id,
+            name: candidate.name,
+            encoded: candidate.encoded,
+            hash: typeof candidate.hash === "string" ? candidate.hash : hashEncodedSource(candidate.encoded),
+            modifiedAt,
+            renderedAt,
+            language,
+          }];
         }
         if (typeof candidate.source === "string") {
+          const encoded = encodePlantUml(candidate.source);
           return [{
             id: candidate.id,
             name: getSchemaName(candidate.source),
-            encoded: encodePlantUml(candidate.source),
-            savedAt: candidate.savedAt,
+            encoded,
+            hash: hashEncodedSource(encoded),
+            modifiedAt,
+            renderedAt,
+            language,
           }];
         }
         return [];
@@ -243,19 +348,14 @@ function loadSchemas(): void {
 
   const urlSchema = loadSchemaFromUrl();
   if (urlSchema) {
-    const existingSchema = schemas.find((schema) => schema.encoded === urlSchema.encoded);
-    if (existingSchema) {
-      urlSchema.id = existingSchema.id;
-    } else {
-      schemas.push(urlSchema);
-    }
+    const existingSchema = schemas.find((schema) => schema.hash === urlSchema.hash);
+    if (existingSchema) urlSchema.id = existingSchema.id;
+    else schemas.push(urlSchema);
   } else if (schemas.length === 0) {
     schemas = [createSchema()];
   }
   currentSchemaId = urlSchema?.id ?? localStorage.getItem(currentSchemaKey) ?? schemas[0].id;
-  if (!schemas.some((schema) => schema.id === currentSchemaId)) {
-    currentSchemaId = schemas[0].id;
-  }
+  if (!schemas.some((schema) => schema.id === currentSchemaId)) currentSchemaId = schemas[0].id;
 }
 
 function persistSchemas(): void {
@@ -263,28 +363,27 @@ function persistSchemas(): void {
   localStorage.setItem(currentSchemaKey, currentSchemaId);
 }
 
-function formatSavedAt(savedAt: string): string {
-  return new Intl.DateTimeFormat("fr-FR", {
-    dateStyle: "short",
-    timeStyle: "medium",
-  }).format(new Date(savedAt));
+function currentSchema(): SchemaDocument | undefined {
+  return schemas.find((schema) => schema.id === currentSchemaId);
 }
 
 function renderSchemaList(): void {
   schemaList.replaceChildren();
-  for (const schema of [...schemas].sort((left, right) => right.savedAt.localeCompare(left.savedAt))) {
+  for (const schema of schemas) {
     const item = document.createElement("div");
     item.className = "schema-item";
     item.classList.toggle("active", schema.id === currentSchemaId);
-    item.innerHTML = '<button class="schema-select" type="button"><strong></strong><span></span></button><div class="schema-item-actions"><button class="schema-external-link" type="button" title="Ouvrir dans une nouvelle fenêtre" aria-label="Ouvrir ce schéma dans une nouvelle fenêtre">↗</button><button class="schema-delete-button" type="button" title="Supprimer ce schéma" aria-label="Supprimer ce schéma">🗑</button></div>';
-    item.querySelector("strong")!.textContent = schema.name;
-    item.querySelector("span")!.textContent = formatSavedAt(schema.savedAt);
-    item.querySelector(".schema-select")!.addEventListener("click", () => selectSchema(schema.id));
-    item.querySelector(".schema-external-link")!.addEventListener("click", (event) => {
+    item.innerHTML = '<button class="schema-select" type="button"><strong></strong><span class="schema-details"></span><span class="schema-activity"><span class="schema-modified"></span><span class="schema-rendered"></span></span></button><div class="schema-item-actions"><button class="schema-external-link" type="button" title="Ouvrir dans une nouvelle fenêtre" aria-label="Ouvrir ce schéma dans une nouvelle fenêtre">↗</button><button class="schema-delete-button" type="button" title="Supprimer ce schéma" aria-label="Supprimer ce schéma">🗑</button></div>';
+    queryIn(item, "strong").textContent = schema.name;
+    queryIn<HTMLSpanElement>(item, ".schema-details").textContent = `${schema.language === "structurizr" ? "Structurizr" : "PlantUML"} · ID ${schema.id}`;
+    queryIn<HTMLSpanElement>(item, ".schema-modified").textContent = `Modifié ${formatActivityTime(schema.modifiedAt)}`;
+    queryIn<HTMLSpanElement>(item, ".schema-rendered").textContent = `Rendu ${schema.renderedAt ? formatActivityTime(schema.renderedAt) : "jamais"}`;
+    queryIn<HTMLButtonElement>(item, ".schema-select").addEventListener("click", () => selectSchema(schema.id));
+    queryIn<HTMLButtonElement>(item, ".schema-external-link").addEventListener("click", (event) => {
       event.stopPropagation();
-      window.open(buildShareUrl(getSchemaSource(schema)), "_blank", "noopener,noreferrer");
+      window.open(buildShareUrl(schema.hash), "_blank", "noopener,noreferrer");
     });
-    item.querySelector(".schema-delete-button")!.addEventListener("click", (event) => {
+    queryIn<HTMLButtonElement>(item, ".schema-delete-button").addEventListener("click", (event) => {
       event.stopPropagation();
       deleteSchema(schema.id);
     });
@@ -292,28 +391,65 @@ function renderSchemaList(): void {
   }
 }
 
+function formatActivityTime(timestamp: string): string {
+  return new Intl.DateTimeFormat("fr-FR", { dateStyle: "short", timeStyle: "short" }).format(new Date(timestamp));
+}
+
+function queryIn<T extends Element>(parent: Element, selector: string): T {
+  const element = parent.querySelector<T>(selector);
+  if (!element) throw new Error(`Missing child element: ${selector}`);
+  return element;
+}
+
+function setSource(source: string, language: SourceLanguage): void {
+  monacoEditor.getModel()?.setValue(source);
+  const model = monacoEditor.getModel();
+  if (model) monaco.editor.setModelLanguage(model, language);
+  languageSelect.value = language;
+}
+
+function cancelScheduledRender(): void {
+  window.clearTimeout(renderTimer);
+  renderTimer = undefined;
+}
+
+function saveEditorToSchema(schema: SchemaDocument): boolean {
+  const source = monacoEditor.getValue().trim();
+  const encoded = encodePlantUml(source);
+  const hash = hashEncodedSource(encoded);
+  if (schema.hash === hash && schema.encoded === encoded) return false;
+  const previousHash = schema.hash;
+  schema.encoded = encoded;
+  schema.hash = hash;
+  schema.name = getSchemaName(source);
+  removeCachedSvg(previousHash);
+  schema.modifiedAt = new Date().toISOString();
+  schema.renderedAt = undefined;
+  return true;
+}
+
 function selectSchema(schemaId: string): void {
   const schema = schemas.find((item) => item.id === schemaId);
   if (!schema || schema.id === currentSchemaId) return;
-  const currentSchema = schemas.find((item) => item.id === currentSchemaId);
-  if (currentSchema) {
-    currentSchema.encoded = encodePlantUml(editor.value);
-  }
+  const active = currentSchema();
+  if (active) saveEditorToSchema(active);
   currentSchemaId = schema.id;
-  editor.value = getSchemaSource(schema);
+  const source = getSchemaSource(schema);
+  setSource(source, schema.language);
+  cancelScheduledRender();
   renderSchemaList();
   updateEditorChrome();
-  void renderDiagram();
+  void renderDiagram(source);
   persistSchemas();
 }
 
 function addSchema(): void {
   const schema = createSchema(`Schéma ${schemas.length + 1}`);
-  const currentSchema = schemas.find((item) => item.id === currentSchemaId);
-  if (currentSchema) currentSchema.encoded = encodePlantUml(editor.value);
+  const active = currentSchema();
+  if (active) saveEditorToSchema(active);
   schemas.push(schema);
   currentSchemaId = schema.id;
-  editor.value = getSchemaSource(schema);
+  setSource(getSchemaSource(schema), schema.language);
   renderSchemaList();
   updateEditorChrome();
   void renderDiagram();
@@ -323,70 +459,29 @@ function addSchema(): void {
 function deleteSchema(schemaId: string): void {
   const schemaIndex = schemas.findIndex((schema) => schema.id === schemaId);
   if (schemaIndex === -1) return;
-
   const schema = schemas[schemaIndex];
   if (!window.confirm(`Supprimer « ${schema.name} » de votre stockage local ?`)) return;
-
   const wasCurrentSchema = schema.id === currentSchemaId;
   schemas.splice(schemaIndex, 1);
-  if (schemas.length === 0) {
-    schemas.push(createSchema());
-  }
-
+  if (schemas.length === 0) schemas.push(createSchema());
   if (wasCurrentSchema) {
     const nextSchema = schemas[Math.min(schemaIndex, schemas.length - 1)];
     currentSchemaId = nextSchema.id;
-    editor.value = getSchemaSource(nextSchema);
+    setSource(getSchemaSource(nextSchema), nextSchema.language);
     updateEditorChrome();
     void renderDiagram();
   }
-
   renderSchemaList();
   persistSchemas();
 }
 
 function updateEditorChrome(): void {
-  const lines = editor.value.split("\n");
-  lineNumbers.textContent = lines.map((_, index) => String(index + 1)).join("\n");
-  codeHighlight.innerHTML = highlightPlantUml(editor.value);
-  sourceStats.textContent = `${lines.length} lignes · ${editor.value.length} caractères`;
-  sourceUrl.value = buildShareUrl(editor.value);
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  }[character] ?? character));
-}
-
-function highlightPlantUml(source: string): string {
-  const tokenPattern = /(\/\/.*$|'.*$|@[a-zA-Z][\w-]*|\b(?:actor|boundary|control|database|entity|file|folder|frame|interface|参加|participant|queue|rectangle|stack|storage|usecase|title|header|footer|legend|note|abstract|class|enum|interface|object|package|skinparam|start|enduml|end|if|else|endif|while|endwhile|repeat|repeatwhile|fork|endfork)\b|(?:<\.\.|<<|>>|-->|<--|->|<-|==|\.{2})|#[a-zA-Z0-9_-]+)/gim;
-  let output = "";
-  let cursor = 0;
-
-  for (const match of source.matchAll(tokenPattern)) {
-    const token = match[0];
-    const index = match.index ?? 0;
-    output += escapeHtml(source.slice(cursor, index));
-    const escapedToken = escapeHtml(token);
-    const tokenClass = token.startsWith("'") || token.startsWith("//")
-      ? "token-comment"
-      : token.startsWith("@")
-        ? "token-directive"
-        : token.startsWith("#")
-          ? "token-color"
-          : /^(?:->|<-|-->|<--|==|\.{2}|<\.\.|<<|>>)$/.test(token)
-            ? "token-arrow"
-            : "token-keyword";
-    output += `<span class="${tokenClass}">${escapedToken}</span>`;
-    cursor = index + token.length;
-  }
-
-  return output + escapeHtml(source.slice(cursor)) + "\n";
+  const source = monacoEditor.getValue();
+  const lines = source.split("\n");
+  sourceStats.textContent = `${lines.length} lignes · ${source.length} caractères`;
+  sourceUrl.value = buildShareUrl(hashEncodedSource(encodePlantUml(source)));
+  const active = currentSchema();
+  if (active) languageSelect.value = active.language;
 }
 
 function setZoom(nextZoom: number): void {
@@ -400,7 +495,15 @@ function setLoading(loading: boolean): void {
   document.body.classList.toggle("is-loading", loading);
 }
 
-async function copyText(text: string, button?: HTMLElement): Promise<void> {
+function displaySvg(svg: string): void {
+  if (currentImageUrl) URL.revokeObjectURL(currentImageUrl);
+  currentImageUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+  image.src = currentImageUrl;
+  image.classList.add("visible");
+  emptyPreview.classList.add("hidden");
+}
+
+async function copyText(text: string, button?: HTMLButtonElement): Promise<void> {
   await navigator.clipboard.writeText(text);
   if (button) {
     const original = button.textContent;
@@ -409,40 +512,54 @@ async function copyText(text: string, button?: HTMLElement): Promise<void> {
   }
 }
 
-async function renderDiagram(): Promise<void> {
-  const source = editor.value.trim();
-  if (!source || !runtime) return;
+async function renderDiagram(source = monacoEditor.getValue().trim(), forceRender = false): Promise<void> {
+  source = source.trim();
+  if (!source) return;
+  const sequence = ++renderSequence;
   setLoading(true);
   renderStatus.textContent = "Rendu en cours...";
   try {
+    const encoded = encodePlantUml(source);
+    const hash = hashEncodedSource(encoded);
+    const active = currentSchema();
+    if (active) saveEditorToSchema(active);
+    const cachedSvg = getCachedSvg(hash);
+    if (!forceRender && active && active.hash === hash && cachedSvg) {
+      displaySvg(cachedSvg);
+      renderStatus.textContent = `Rendu restauré · ${new Date().toLocaleTimeString("fr-FR")}`;
+      history.replaceState(null, "", buildShareUrl(hash));
+      return;
+    }
+    if (!runtime) return;
     const blob = await runtime.renderSvg(source);
-    if (currentImageUrl) URL.revokeObjectURL(currentImageUrl);
-    currentImageUrl = URL.createObjectURL(blob);
-    image.src = currentImageUrl;
-    image.classList.add("visible");
-    emptyPreview.classList.add("hidden");
+    const svg = await blob.text();
+    if (sequence !== renderSequence) return;
+    displaySvg(svg);
     renderStatus.textContent = `Rendu terminé · ${new Date().toLocaleTimeString("fr-FR")}`;
-    const currentSchema = schemas.find((schema) => schema.id === currentSchemaId);
-    if (currentSchema) {
-      currentSchema.encoded = encodePlantUml(editor.value);
-      currentSchema.name = getSchemaName(editor.value);
-      currentSchema.savedAt = new Date().toISOString();
+    if (active) {
+      active.encoded = encoded;
+      active.hash = hash;
+      active.name = getSchemaName(source);
+      active.renderedAt = new Date().toISOString();
+      cacheSvg(hash, svg);
       renderSchemaList();
       persistSchemas();
     }
-    history.replaceState(null, "", buildShareUrl(editor.value));
+    history.replaceState(null, "", buildShareUrl(hash));
   } catch (error) {
-    renderStatus.textContent = "Erreur de rendu";
-    console.error(error);
+    if (sequence === renderSequence) {
+      renderStatus.textContent = error instanceof Error ? `Erreur de rendu · ${error.message}` : "Erreur de rendu";
+      console.error(error);
+    }
   } finally {
-    setLoading(false);
+    if (sequence === renderSequence) setLoading(false);
   }
 }
 
 function scheduleRender(): void {
   updateEditorChrome();
-  window.clearTimeout(renderTimer);
-  renderTimer = window.setTimeout(() => void renderDiagram(), 700);
+  cancelScheduledRender();
+  renderTimer = window.setTimeout(() => void renderDiagram(monacoEditor.getValue().trim(), true), 700);
 }
 
 function loadClassicScript(src: string): Promise<void> {
@@ -456,9 +573,7 @@ function loadClassicScript(src: string): Promise<void> {
 }
 
 async function initializeRuntime(): Promise<void> {
-  const basePath = import.meta.env.DEV
-    ? "/node_modules/@sakirtemel/plantuml.js"
-    : "/plantuml-wasm";
+  const basePath = import.meta.env.DEV ? "/node_modules/@sakirtemel/plantuml.js" : "/plantuml-wasm";
   try {
     await loadClassicScript("https://cjrtnc.leaningtech.com/2.3/loader.js");
     await loadClassicScript(`${basePath}/plantuml.js`);
@@ -478,7 +593,7 @@ async function initializeRuntime(): Promise<void> {
             return;
           }
           if (result.trimStart().startsWith("{")) {
-            const response = JSON.parse(result) as { status?: string; error?: string };
+            const response = JSON.parse(result) as { error?: string };
             reject(new Error(response.error ?? "Le rendu SVG a échoué"));
             return;
           }
@@ -497,73 +612,101 @@ async function initializeRuntime(): Promise<void> {
 }
 
 loadSchemas();
-editor.value = schemas.find((schema) => schema.id === currentSchemaId)
-  ? getSchemaSource(schemas.find((schema) => schema.id === currentSchemaId)!)
-  : defaultSource;
+loadSvgCache();
+persistSchemas();
+const initialSchema = currentSchema() ?? createSchema();
+setSource(getSchemaSource(initialSchema), initialSchema.language);
 renderSchemaList();
 updateEditorChrome();
 
-editor.addEventListener("input", scheduleRender);
-editor.addEventListener("scroll", () => {
-  lineNumbers.scrollTop = editor.scrollTop;
-  codeHighlight.scrollTop = editor.scrollTop;
-  codeHighlight.scrollLeft = editor.scrollLeft;
+monacoEditor.onDidChangeModelContent(() => scheduleRender());
+monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => void renderDiagram(undefined, true));
+monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => query<HTMLButtonElement>("#export-button").click());
+
+query<HTMLButtonElement>("#render-button").addEventListener("click", () => void renderDiagram(undefined, true));
+query<HTMLButtonElement>("#copy-button").addEventListener("click", (event) => {
+  const button = event.currentTarget;
+  if (button instanceof HTMLButtonElement) void copyText(monacoEditor.getValue(), button);
 });
-document.querySelector("#render-button")!.addEventListener("click", () => void renderDiagram());
-document.querySelector("#copy-button")!.addEventListener("click", (event) => void copyText(editor.value, event.currentTarget as HTMLElement));
-document.querySelector("#editor-copy-button")!.addEventListener("click", (event) => void copyText(editor.value, event.currentTarget as HTMLElement));
-document.querySelector("#url-copy-button")!.addEventListener("click", () => void copyText(sourceUrl.value));
-document.querySelector("#url-open-button")!.addEventListener("click", () => {
-  window.open(sourceUrl.value, "_blank", "noopener,noreferrer");
+query<HTMLButtonElement>("#editor-copy-button").addEventListener("click", (event) => {
+  const button = event.currentTarget;
+  if (button instanceof HTMLButtonElement) void copyText(monacoEditor.getValue(), button);
 });
-document.querySelector("#reset-button")!.addEventListener("click", () => {
-  editor.value = defaultSource;
-  scheduleRender();
+query<HTMLButtonElement>("#url-copy-button").addEventListener("click", () => void copyText(sourceUrl.value));
+query<HTMLButtonElement>("#url-open-button").addEventListener("click", () => window.open(sourceUrl.value, "_blank", "noopener,noreferrer"));
+query<HTMLButtonElement>("#reset-button").addEventListener("click", () => {
+  const active = currentSchema();
+  if (active) {
+    active.language = "plantuml";
+    persistSchemas();
+  }
+  setSource(defaultSource, "plantuml");
 });
-document.querySelector("#add-schema-button")!.addEventListener("click", addSchema);
-document.querySelector("#collapse-workspace-button")!.addEventListener("click", (event) => {
-  const button = event.currentTarget as HTMLButtonElement;
-  const collapsed = document.querySelector(".workspace")!.classList.toggle("workspace-collapsed");
+query<HTMLButtonElement>("#add-schema-button").addEventListener("click", addSchema);
+query<HTMLButtonElement>("#clear-cache-button").addEventListener("click", () => {
+  clearSvgCache();
+  renderStatus.textContent = "Cache SVG de session supprimé";
+});
+query<HTMLButtonElement>("#collapse-workspace-button").addEventListener("click", (event) => {
+  const button = event.currentTarget;
+  if (!(button instanceof HTMLButtonElement)) return;
+  const collapsed = document.querySelector(".workspace")?.classList.toggle("workspace-collapsed") ?? false;
   button.textContent = collapsed ? "›" : "‹";
   button.title = collapsed ? "Développer Workspace" : "Réduire Workspace";
   button.setAttribute("aria-label", button.title);
 });
-document.querySelector("#theme-button")!.addEventListener("click", () => {
-  document.documentElement.classList.toggle("light-theme");
+query<HTMLButtonElement>("#theme-button").addEventListener("click", () => {
+  const light = document.documentElement.classList.toggle("light-theme");
+  monaco.editor.setTheme(light ? "vs" : "vs-dark");
 });
-document.querySelector("#zoom-out")!.addEventListener("click", () => setZoom(zoom - 0.1));
-document.querySelector("#zoom-in")!.addEventListener("click", () => setZoom(zoom + 0.1));
-document.querySelector("#fit-button")!.addEventListener("click", () => setZoom(1));
-document.querySelector("#download-button")!.addEventListener("click", () => {
+query<HTMLSelectElement>("#source-language").addEventListener("change", (event) => {
+  const select = event.currentTarget;
+  if (!(select instanceof HTMLSelectElement)) return;
+  const language: SourceLanguage = select.value === "structurizr" ? "structurizr" : "plantuml";
+  const active = currentSchema();
+  if (active) {
+    active.language = language;
+    const model = monacoEditor.getModel();
+    if (model) monaco.editor.setModelLanguage(model, language);
+    renderSchemaList();
+    persistSchemas();
+  }
+});
+query<HTMLButtonElement>("#zoom-out").addEventListener("click", () => setZoom(zoom - 0.1));
+query<HTMLButtonElement>("#zoom-in").addEventListener("click", () => setZoom(zoom + 0.1));
+query<HTMLButtonElement>("#fit-button").addEventListener("click", () => setZoom(1));
+const downloadDiagram = (): void => {
   if (!currentImageUrl) return;
   const link = document.createElement("a");
   link.href = currentImageUrl;
   link.download = "diagram.svg";
   link.click();
-});
-document.querySelector("#export-button")!.addEventListener("click", () => {
-  if (!currentImageUrl) return;
-  const link = document.createElement("a");
-  link.href = currentImageUrl;
-  link.download = "diagram.svg";
-  link.click();
-});
-document.querySelector<HTMLInputElement>("#file-input")!.addEventListener("change", async (event) => {
-  const input = event.currentTarget as HTMLInputElement;
+};
+query<HTMLButtonElement>("#download-button").addEventListener("click", downloadDiagram);
+query<HTMLButtonElement>("#export-button").addEventListener("click", downloadDiagram);
+query<HTMLInputElement>("#file-input").addEventListener("change", async (event) => {
+  const input = event.currentTarget;
+  if (!(input instanceof HTMLInputElement)) return;
   const file = input.files?.[0];
   if (file) {
-    editor.value = await file.text();
+    const language: SourceLanguage = file.name.endsWith(".dsl") ? "structurizr" : "plantuml";
+    const active = currentSchema();
+    if (active) {
+      active.language = language;
+      persistSchemas();
+    }
+    setSource(await file.text(), language);
     scheduleRender();
   }
 });
 window.addEventListener("keydown", (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
     event.preventDefault();
-    void renderDiagram();
+    void renderDiagram(undefined, true);
   }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
     event.preventDefault();
-    document.querySelector<HTMLButtonElement>("#export-button")!.click();
+    query<HTMLButtonElement>("#export-button").click();
   }
 });
 

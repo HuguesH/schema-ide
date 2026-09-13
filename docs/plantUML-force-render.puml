@@ -1,0 +1,29 @@
+@startuml
+!theme aws-orange
+title Forcer le rendu
+
+actor Utilisateur
+participant "Éditeur Web" as Editor
+database "Cache des schémas\n(LocalStorage)" as SchemaCache
+database "Cache SVG de session\n(SessionStorage)" as SvgCache
+participant "Moteur PlantUML" as PlantUML
+
+Utilisateur -> Editor: Clique sur « Rendre »\nou appuie sur Ctrl/Cmd + Enter
+Editor -> Editor: Ignore le SVG présent dans le cache
+Editor -> PlantUML: Rend explicitement\nla source courante
+PlantUML --> Editor: Retourne le nouveau SVG
+Editor -> SvgCache: Remplace le SVG sous le hash
+Editor -> SchemaCache: Enregistre renderedAt
+Editor --> Utilisateur: Affiche le SVG du schéma rendu
+
+note right of SchemaCache
+  modifiedAt ne change pas :
+  la source n'a pas été modifiée.
+end note
+
+note right of SvgCache
+  Le cache est mis à jour après
+  le rendu volontaire.
+end note
+
+@enduml

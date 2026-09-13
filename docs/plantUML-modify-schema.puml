@@ -1,0 +1,35 @@
+@startuml
+!theme aws-orange
+title Modifier un schéma
+
+actor Utilisateur
+participant "Éditeur Web" as Editor
+database "Cache des schémas\n(LocalStorage)" as SchemaCache
+database "Cache SVG de session\n(SessionStorage)" as SvgCache
+participant "Moteur PlantUML" as PlantUML
+
+Utilisateur -> Editor: Modifie le code du schéma
+Editor -> Editor: Calcule le nouveau hash
+Editor -> Editor: Compare avec le hash enregistré
+
+alt Source modifiée
+  Editor -> SvgCache: Supprime le SVG de l'ancien hash
+  Editor -> SchemaCache: Enregistre la source,\nle hash et modifiedAt
+  Editor -> PlantUML: Rend automatiquement la nouvelle source
+  PlantUML --> Editor: Retourne le SVG
+  Editor -> SvgCache: Enregistre le SVG sous le nouveau hash
+  Editor -> SchemaCache: Enregistre renderedAt
+  Editor --> Utilisateur: Affiche le nouveau SVG du schéma modifié
+else Source identique
+  Editor -> Editor: Ne change pas la source,\nle hash ni modifiedAt
+  Editor -> SvgCache: Recherche le SVG sous le hash
+  SvgCache --> Editor: SVG en cache
+  Editor --> Utilisateur: Affiche le SVG en cache du schéma
+end
+
+note over SchemaCache,SvgCache
+  Les métadonnées et la source sont séparées
+  du cache SVG de session.
+end note
+
+@enduml

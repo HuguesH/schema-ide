@@ -1,0 +1,27 @@
+@startuml
+!theme aws-orange
+title Créer un schéma
+
+actor Utilisateur
+participant "Éditeur Web" as Editor
+database "Cache des schémas\n(LocalStorage)" as SchemaCache
+database "Cache SVG de session\n(SessionStorage)" as SvgCache
+participant "Moteur PlantUML" as PlantUML
+
+Utilisateur -> Editor: Clique sur « Nouveau schéma »
+Editor -> Editor: Crée l'identifiant unique,\nle nom et la source initiale
+Editor -> SchemaCache: Enregistre le schéma,\nle hash et modifiedAt
+note right of SchemaCache
+  Les métadonnées du schéma sont
+  conservées dans le cache des schémas.
+end note
+Editor -> PlantUML: Rend la source initiale
+PlantUML --> Editor: Retourne le SVG
+Editor -> SvgCache: Enregistre le SVG sous le hash
+note right of SvgCache
+  Le SVG est conservé séparément
+  dans le cache de session.
+end note
+Editor --> Utilisateur: Affiche le SVG du schéma rendu
+
+@enduml
