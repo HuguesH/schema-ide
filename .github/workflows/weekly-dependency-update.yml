@@ -1,0 +1,76 @@
+name: Weekly dependency update
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Create update branch
+        id: branch
+        run: |
+          branch_name="chore/deps-update-$(date +'%Y-%m-%d')"
+          git checkout -b "$branch_name"
+          echo "name=$branch_name" >> "$GITHUB_OUTPUT"
+
+      - name: Update npm dependencies
+        run: |
+          npx npm-check-updates -u
+          npm install
+
+      - name: Build solution
+        run: npm run build
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ steps.branch.outputs.name }}
+          path: dist
+          retention-days: 30
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet -- package.json package-lock.json; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push changes
+        if: steps.changes.outputs.has_changes == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore: weekly dependency update"
+          git push origin "${{ steps.branch.outputs.name }}"
+
+      - name: Create pull request
+        if: steps.changes.outputs.has_changes == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: ${{ steps.branch.outputs.name }}
+          title: "chore: weekly dependency update"
+          body: |
+            Mise à jour hebdomadaire automatique des dépendances Node.
+
+            Le build (`npm run build`) a été validé avec succès sur cette branche.
+          commit-message: "chore: weekly dependency update"
