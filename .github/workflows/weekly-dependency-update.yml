@@ -20,15 +20,17 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Create update branch
         id: branch
         run: |
           branch_name="chore/deps-update-$(date +'%Y-%m-%d')"
+          artifact_name="${branch_name//\//-}"
           git checkout -b "$branch_name"
           echo "name=$branch_name" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
 
       - name: Update npm dependencies
         run: |
@@ -41,7 +43,7 @@ jobs:
       - name: Upload dist artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ steps.branch.outputs.name }}
+          name: dist-${{ steps.branch.outputs.artifact_name }}
           path: dist
           retention-days: 30
 
