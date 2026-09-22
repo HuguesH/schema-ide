@@ -26,7 +26,7 @@
   "dependencies": {
     "@sakirtemel/plantuml.js": "^1.0.1",
     "@types/pako": "^3.0.0",
-    "monaco-editor": "^0.56.0",
+    "monaco-editor": "^0.55.1",
     "pako": "^3.0.2",
     "plantuml-encoder": "^1.4.0"
   }
