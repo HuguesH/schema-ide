@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineConfig, type Plugin } from "vite";
 
@@ -12,6 +12,7 @@ function copyPlantUmlRuntime(): Plugin {
       for (const file of ["plantuml.js", "plantuml-core.jar", "plantuml-core.jar.js"]) {
         copyFileSync(resolve(source, file), resolve(destination, file));
       }
+      cpSync(resolve(source, "themes"), resolve(destination, "themes"), { recursive: true });
     },
   };
 }
