@@ -1,0 +1,79 @@
+name: Publish release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Merged version to publish (for example 0.1.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Display Node.js and npm versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Validate merged version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must use the MAJOR.MINOR.PATCH format (for example 0.1.1)." >&2
+            exit 1
+          fi
+
+          package_version=$(node -p "require('./package.json').version")
+          if [[ "$package_version" != "$RELEASE_VERSION" ]]; then
+            echo "package.json contains $package_version, expected $RELEASE_VERSION." >&2
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/v${RELEASE_VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${RELEASE_VERSION} already exists." >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build solution
+        run: npm run build
+
+      - name: Package release assets
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          git archive --format=zip \
+            --output="schema-ide-${RELEASE_VERSION}-source.zip" HEAD
+          zip -qr "schema-ide-${RELEASE_VERSION}-dist.zip" dist
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          gh release create "v${RELEASE_VERSION}" \
+            --target main \
+            --title "Schema IDE ${RELEASE_VERSION}" \
+            --notes "Production release ${RELEASE_VERSION} published from main." \
+            "schema-ide-${RELEASE_VERSION}-source.zip" \
+            "schema-ide-${RELEASE_VERSION}-dist.zip"
