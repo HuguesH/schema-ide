@@ -1,6 +1,6 @@
 {
   "name": "schema-ide",
-  "version": "1.0.0",
+  "version": "0.1.1",
   "description": "Schema IDE",
   "type": "module",
   "engines": {
